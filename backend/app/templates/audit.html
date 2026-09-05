@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Audit · ReceivablesAI{% endblock %}
+
+{% block content %}
+<section class="pagehead">
+  <div class="headrow">
+    <div>
+      <div class="section-label"><span class="mark">Audit</span> — integrity console</div>
+      <h1>Hash-chained audit trail</h1>
+    </div>
+    <div class="headmeta">{{ chain_total }} events · database <code>{{ db_file }}</code></div>
+  </div>
+  <p class="sub">
+    Append-only, SHA-256 hash-chained event log. Each event stores the canonical payload and the hash of
+    <em>previous hash + payload</em>; verification recomputes the whole chain with the same logic used by
+    <code>app.audit</code>. A single edited payload breaks the chain at exactly that event.
+  </p>
+</section>
+
+<section class="card chaincard anim-in">
+  <div class="chainstate">
+    <div class="chainpill {{ 'ok' if chain_valid else 'bad' }}">
+      <span class="dot"></span>{{ 'Chain valid' if chain_valid else 'Chain invalid' }}
+    </div>
+    <div>
+      <strong>{{ chain_message }}</strong>
+      <div class="muted small">{{ chain_total }} events in the chain
+        {% if db_file %} · database: <code>{{ db_file }}</code>{% endif %}
+      </div>
+    </div>
+  </div>
+  {% if broken %}
+  <div class="banner bad">
+    Tamper point identified: audit event <code>#{{ broken.id }}</code> (seq {{ broken.seq }}, action
+    <code>{{ broken.action }}</code>{% if broken.case_id %}, case <a href="/cases/{{ broken.case_id }}">#{{ broken.case_id }}</a>{% endif %}).
+    Its stored hash no longer matches its (modified) canonical payload.
+  </div>
+  {% endif %}
+</section>
+
+{% if demo_active() %}
+<section class="card demoactions anim-in d1">
+  <div class="card-hd">
+    <h2>Demo integrity controls</h2>
+    <span class="chip demo">DEMO ONLY</span>
+  </div>
+  <p class="note">
+    These actions exist <strong>only</strong> when <code>RA_DEMO_MODE=1</code> and the app DB is
+    <code>demo.db</code>. They modify the demo audit trail to demonstrate the existing verifier —
+    never a second audit implementation, and they are refused for any non-demo database.
+  </p>
+  <div class="btnrow">
+    <form method="post" action="/demo/tamper"
+          onsubmit="return confirm('Modify exactly one audit payload in the demo DB (hash left stale)? Verification will flip to INVALID and name the event.')">
+      <button type="submit" class="btn warn">Tamper one audit row (demo)</button>
+    </form>
+    <form method="post" action="/demo/reset"
+          onsubmit="return confirm('Reset demo data? This re-runs scripts/seed_demo.py as a subprocess — all demo rows are recreated from scratch and the audit chain restarts VALID from genesis.')">
+      <button type="submit" class="btn ok">Reset demo data (re-seed)</button>
+    </form>
+  </div>
+  <p class="note tiny">Reset re-invokes the existing seeder exactly as
+    <code>python -m scripts.seed_demo --db-url &lt;this demo db&gt;</code> — it is never imported into this process.
+    After a reset the chain returns to VALID.</p>
+</section>
+{% endif %}
+
+<section class="card tablewrap anim-in d2">
+  <div class="card-hd">
+    <h2>Recent events</h2>
+    <span class="muted small">newest at the bottom — chain order is ascending seq</span>
+  </div>
+  {% if events %}
+  <table class="grid audit">
+    <thead>
+      <tr>
+        <th>Seq</th><th>When</th><th>Event</th><th>Actor</th><th>Case</th><th>Payload</th><th>Linkage</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in events %}
+      <tr class="{{ 'brokenrow' if e.broken }}">
+        <td><code>{{ e.seq }}</code>{% if e.broken %} <span class="chip bad">tampered</span>{% endif %}</td>
+        <td class="muted">{{ P.fmt_dt(e.created_at) }}</td>
+        <td>
+          <strong>{{ e.label }}</strong>
+          <span class="tiny muted"><code>{{ e.action }}</code> · event #{{ e.id }}</span>
+        </td>
+        <td><code>{{ e.actor }}</code></td>
+        <td>{% if e.case_id %}<a href="/cases/{{ e.case_id }}">{{ e.entity or ('#' ~ e.case_id) }}</a>{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td>
+          {% if e.payload %}
+          <details class="evdetails"><summary>{{ e.payload.keys() | list | join(', ') | truncate(60) }}</summary>
+            <pre class="tiny">{{ pp_json(e.payload) }}</pre>
+          </details>
+          {% else %}<span class="dim">∅</span>{% endif %}
+        </td>
+        <td class="tiny">
+          <code class="muted">prev {{ e.prev_short }}…</code><br>
+          <code class="{{ 'bad-text' if e.broken }}">sha256 {{ e.hash_short }}…</code>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No audit events.</p>
+  {% endif %}
+</section>
+{% endblock %}

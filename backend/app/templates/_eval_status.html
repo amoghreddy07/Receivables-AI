@@ -1,0 +1,15 @@
+{# Eval run-status chip — rendered server-side on /eval and returned by GET /eval/status.
+   Polling contract: while the batch runs, this node carries hx-get="/eval/status" with
+   hx-trigger="every 2s" and hx-swap="outerHTML", so HTMX swaps in a fresh fragment every
+   ~2 seconds and updates ONLY this indicator. A terminal fragment (Completed / Failed)
+   carries no polling attributes, so the swap ends polling — no uncapped loop, no reload. #}
+{% if run_state.running %}
+<span id="eval-status" class="chip info"
+      hx-get="/eval/status" hx-trigger="every 2s" hx-swap="outerHTML">
+  Running… <span class="tiny muted">started {{ run_state.started_at }}</span>
+</span>
+{% elif run_state.error %}
+<span id="eval-status" class="chip bad">Failed: {{ run_state.error }}</span>
+{% elif run_state.finished_at %}
+<span id="eval-status" class="chip ok">Completed · {{ run_state.finished_at }}</span>
+{% endif %}

@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% from "_macros.html" import state_chip, demo_mark, money %}
+{% block title %}Overview · ReceivablesAI{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <div class="hero-kicker"><span class="rule"></span><span class="mark">ReceivablesAI</span> · AI revenue recovery agent · Razorpay Track 03</div>
+  <h1 class="hero-title">Revenue recovery,<br><em>without the guesswork.</em></h1>
+  <p class="hero-sub">
+    A closed-loop agent that detects revenue at risk, <strong>reads the payer&rsquo;s own words</strong>,
+    diagnoses the cause, proposes a bounded intervention &mdash; and executes only what the
+    deterministic policy engine authorizes.
+  </p>
+</section>
+
+<section class="finband anim-in">
+  <div class="fin-primary">
+    <div class="fin-label">Revenue at risk <span class="muted tiny">· 9-case demo</span></div>
+    <div class="fin-value count-up" data-target="{{ stats.revenue_at_risk_minor // 100 }}">₹0</div>
+    <div class="fin-note">{{ stats.at_risk_cases }} case{{ 's' if stats.at_risk_cases != 1 }} awaiting human approval</div>
+  </div>
+  <div class="vrule"></div>
+  <div class="fin-primary">
+    <div class="fin-label">Revenue recovered <span class="muted tiny">· 9-case demo</span> {% if demo_active() %}<span class="chip sim">simulated</span>{% endif %}</div>
+    <div class="fin-value recovered count-up" data-target="{{ stats.recovered_minor // 100 }}">₹0</div>
+    <div class="fin-note">{{ stats.recovered_cases }} of {{ stats.total_cases }} cases recovered through policy-authorized interventions</div>
+  </div>
+</section>
+
+<section class="counters anim-in d1">
+  {% set total = stats.total_cases if stats.total_cases else 1 %}
+  {% set success = 100 * stats.recovered_cases / total %}
+  <div class="counter">
+    <div class="c-label">Recovery success</div>
+    <div class="c-value">{{ '%.0f'|format(success) }}%</div>
+    <div class="c-bar"><i style="width: {{ success }}%"></i></div>
+    <div class="c-sub">{{ stats.recovered_cases }} of {{ stats.total_cases }} cases</div>
+  </div>
+  <div class="counter">
+    <div class="c-label">Open cases</div>
+    <div class="c-value">{{ counts.open }}</div>
+    <div class="c-sub">{{ 'no autonomous action pending' if counts.open == 0 else 'agent may act' }}</div>
+  </div>
+  <div class="counter">
+    <div class="c-label">Pending approval</div>
+    <div class="c-value">{{ counts.pending }}</div>
+    <div class="c-sub">human decisions queued</div>
+  </div>
+  <div class="counter">
+    <div class="c-label">Escalated</div>
+    <div class="c-value">{{ counts.escalated }}</div>
+    <div class="c-sub">{{ P.inr_major(stats.escalated_minor) }} at risk</div>
+  </div>
+  <div class="counter">
+    <div class="c-label">Hard stops</div>
+    <div class="c-value">{{ counts.stopped }}</div>
+    <div class="c-sub">{{ P.inr_major(stats.hard_stop_minor) }} protected by rules</div>
+  </div>
+</section>
+
+<section class="pipeline anim-in d2" aria-label="Recovery pipeline">
+  <div class="pstep">Signal<span class="pstep-sub">customer event</span></div>
+  <div class="pstep">Detect<span class="pstep-sub">risk scoring</span></div>
+  <div class="pstep">Diagnose<span class="pstep-sub">LLM + rules</span></div>
+  <div class="pstep">Propose<span class="pstep-sub">bounded plan</span></div>
+  <div class="pstep strong">Policy<span class="pstep-sub">authorizes</span></div>
+  <div class="pstep verdicts">Decide<span class="pstep-sub">ok / block / escalate</span></div>
+  <div class="pstep">Execute<span class="pstep-sub">bounded executor</span></div>
+  <div class="pstep outcome">Recover<span class="pstep-sub">audited outcome</span></div>
+</section>
+
+<div class="twocol">
+  <section class="card anim-in d2">
+    <div class="card-hd">
+      <h2>AI-enabled vs rules-only</h2>
+      <span class="muted small">evaluation report · {{ eval_db_file }}</span>
+    </div>
+    {% if eval_runs %}
+    <div class="barblock">
+      {% for run in eval_runs %}
+      {% set m = run.metrics %}
+      <div class="barline {{ 'ai' if run.llm_mode == 'auto' }}">
+        <span class="barlabel">{{ run.label }}</span>
+        <span class="bartrack">
+          <span class="barfill" style="width: {{ 100 * (m.get('recovery_rate') or 0) }}%"></span>
+        </span>
+        <span class="barvalue">{{ P.pct(m.get('recovery_rate')) }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th class="num">Recovered</th>
+          <th class="num">Precision</th>
+          <th class="num">False actions</th>
+          <th class="num">Violations</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in eval_runs %}
+        {% set m = run.metrics %}
+        <tr class="{{ 'airow' if run.llm_mode == 'auto' }}">
+          <td>
+            <strong>{{ run.label }}</strong>
+            <span class="muted small">{{ run.llm_mode }}</span>
+          </td>
+          <td class="num">{{ P.inr_major(m.get('money_recovered_minor')) }}</td>
+          <td class="num">{{ P.pct(m.get('action_precision')) }}</td>
+          <td class="num">{{ P.pct(m.get('false_action_rate')) }}</td>
+          <td class="num {{ 'bad-text' if m.get('hard_violations') else 'ok-text' }}">{{ m.get('hard_violations', 0) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="note">Rates computed by <code>app.eval</code> from harvested run rows — never hardcoded. The AI-enabled run is fully offline (deterministic NLU, no API key). See <a href="/eval">Evaluation</a>.</p>
+    {% else %}
+    <p class="empty">No evaluation runs persisted yet. Open <a href="/eval">Evaluation</a> and start a batch — it runs fully offline through the deterministic NLU path (no API key, no network).</p>
+    {% endif %}
+  </section>
+
+  <section class="card anim-in d3">
+    <div class="card-hd">
+      <h2>Deterministic hard stops</h2>
+      <span class="muted small">recent · decided by rules, never the LLM</span>
+    </div>
+    {% if stopped %}
+    <ul class="stoplist">
+      {% for s in stopped %}
+      <li>
+        <span class="chip bad">{{ s.label }}</span>
+        <code>{{ s.code }}</code>
+        <a href="/cases/{{ s.case_id }}">{{ s.entity }}</a>
+        <span class="muted small">{{ P.fmt_dt(s.created_at) }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="note">Every one of these was decided by <code>app.policy.rules</code>. The AI proposal is ignored when a hard rule fires — <em>AI cannot override policy</em>.</p>
+    {% else %}
+    <p class="empty">No escalation rows in the app DB.</p>
+    {% endif %}
+  </section>
+</div>
+
+<section class="card anim-in d3">
+  <div class="card-hd">
+    <h2>Recent recovery activity</h2>
+    <span class="muted small">
+      audit chain
+      <span class="chip {{ 'ok' if chain_valid else 'bad' }}">{{ 'valid' if chain_valid else 'INVALID' }}</span>
+      {{ chain_message }}
+    </span>
+  </div>
+  {% if events %}
+  <table class="grid">
+    <thead>
+      <tr><th>When</th><th>Event</th><th>Actor</th><th>Case</th><th>Summary</th></tr>
+    </thead>
+    <tbody>
+      {% for e in events %}
+      <tr>
+        <td class="muted">{{ P.fmt_dt(e.created_at) }}</td>
+        <td><strong>{{ e.label }}</strong><code class="small">{{ e.action }}</code></td>
+        <td><code>{{ e.actor }}</code></td>
+        <td>{% if e.case_id %}<a href="/cases/{{ e.case_id }}">#{{ e.case_id }}</a>{% else %}—{% endif %}</td>
+        <td class="muted small">{{ e.summary }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No audit events yet.</p>
+  {% endif %}
+</section>
+
+{# One-shot number count-up (initial load only; no polling, no loops). #}
+<script>
+(function () {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  var els = document.querySelectorAll('.count-up');
+  if (!els.length) return;
+  var fmt = new Intl.NumberFormat('en-IN');
+  function run(el) {
+    var target = parseInt(el.getAttribute('data-target'), 10) || 0;
+    var dur = 900, t0 = null;
+    function step(ts) {
+      if (!t0) t0 = ts;
+      var p = Math.min((ts - t0) / dur, 1);
+      p = 1 - Math.pow(1 - p, 3); /* ease-out */
+      el.textContent = '₹' + fmt.format(Math.round(target * p));
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+  els.forEach(run);
+})();
+</script>
+{% endblock %}

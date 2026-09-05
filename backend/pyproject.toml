@@ -1,0 +1,21 @@
+[project]
+name = "receivablesai"
+version = "0.1.0"
+description = "ReceivablesAI — B2B AI revenue-recovery agent for Razorpay AI Buildathon 2026, Track 03"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "jinja2>=3.1",
+    "sqlalchemy>=2.0",
+    "pydantic>=2.6",
+    "razorpay>=1.4.0",
+    "pytest>=8.0",
+]
+
+[project.optional-dependencies]
+llm = ["openai>=1.30"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

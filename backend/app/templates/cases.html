@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% from "_macros.html" import state_chip, verdict_chip, path_chip, demo_mark, money %}
+{% block title %}Recovery · ReceivablesAI{% endblock %}
+
+{% block content %}
+<section class="pagehead">
+  <div class="headrow">
+    <div>
+      <div class="section-label"><span class="mark">Recovery</span> — queue</div>
+      <h1>Revenue operations queue</h1>
+    </div>
+    <div class="headmeta">{{ rows|length }} case{{ 's' if rows|length != 1 }} shown · every row is a real <code>RiskCase</code> from the app database</div>
+  </div>
+  <p class="sub">Diagnosis, confidence, policy verdict and outcome are read from persisted rows — never recomputed in this page.</p>
+</section>
+
+<section class="filterbar">
+  {% for key, label in filters.items() %}
+  <a class="fchip {{ 'on' if current_filter == key }}" href="/cases?filter={{ key }}">
+    {{ label }} <span class="count">{{ counts[key] }}</span>
+  </a>
+  {% endfor %}
+</section>
+
+<section class="card tablewrap">
+  <table class="grid cases">
+    <thead>
+      <tr>
+        <th>Case</th>
+        <th>Customer</th>
+        <th>Invoice</th>
+        <th class="num">Amount</th>
+        <th class="num">Overdue</th>
+        <th>AI diagnosis</th>
+        <th class="num">Conf.</th>
+        <th>Proposed action</th>
+        <th>Policy verdict</th>
+        <th>Outcome</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr class="caselink" data-href="/cases/{{ r.id }}">
+        <td>
+          <a class="caseid" href="/cases/{{ r.id }}">{{ r.entity_id }}</a>
+          <span class="tiny">{{ demo_mark(r.demo, r.simulated) }}</span>
+        </td>
+        <td>{{ r.org }}</td>
+        <td><code>{{ r.invoice_id }}</code></td>
+        <td class="num">{{ money(r.amount_minor) }}</td>
+        <td class="num">{{ r.days_overdue }}d</td>
+        <td>
+          <strong>{{ r.cause }}</strong>
+          {{ path_chip(r.path) }}
+          {% if r.cause_code == 'insufficient_context' %}<span class="chip warn" title="Rules abstained — unstructured context needs NLU">abstained</span>{% endif %}
+        </td>
+        <td class="num">{% if r.confidence is not none %}{{ '%.0f'|format(100 * r.confidence) }}%{% else %}—{% endif %}</td>
+        <td class="small">{{ r.proposed_playbook or '—' }}</td>
+        <td>{{ verdict_chip(r.verdict) }}</td>
+        <td>
+          {{ state_chip(r.state) }}
+          {% if r.recovered_minor %}<span class="money ok-text small">{{ money(r.recovered_minor) }}</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="10" class="empty">No cases match this filter.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+
+{% block bodyclass %}casespage{% endblock %}

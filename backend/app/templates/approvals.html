@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% from "_macros.html" import state_chip, path_chip, money %}
+{% block title %}Approvals · ReceivablesAI{% endblock %}
+
+{% block content %}
+<section class="pagehead">
+  <div class="headrow">
+    <div>
+      <div class="section-label"><span class="mark">Approvals</span> — supervised interventions</div>
+      <h1>Operations inbox</h1>
+    </div>
+    <div class="headmeta">{{ pending_rows|length }} pending decision{{ 's' if pending_rows|length != 1 }}</div>
+  </div>
+  <p class="sub">
+    The policy engine parked these actions as <code>REQUIRES_APPROVAL</code>. Approving or declining calls the
+    <em>existing</em> <code>app.agent.decide_approval()</code> — no decision logic lives in this page, and every
+    decision is written to the hash-chained audit trail.
+  </p>
+</section>
+
+{% if pending_rows %}
+{% for row in pending_rows %}
+{% set i = row.intervention %}
+{% set case = row.case %}
+<section class="card pending anim-in">
+  <div class="pendhead">
+    <h2>
+      <a href="/cases/{{ case.id }}">{{ case.entity_id }}</a>
+      {{ state_chip(case.state) }}
+    </h2>
+    <div class="small muted">
+      {{ row.customer.org_name if row.customer else '?' }} · invoice <code>{{ row.invoice.rzr_invoice_id if row.invoice else case.entity_id }}</code> ·
+      at risk {{ money(case.amount_at_risk_minor) }} · {{ case.days_overdue }} days overdue
+    </div>
+  </div>
+
+  <div class="pendgrid">
+    <div class="pendcol">
+      <h3 class="section-label" style="margin-top:14px">Diagnosis · <span class="mark">{{ row.diagnosis.path if row.diagnosis else '—' }}</span></h3>
+      {% if row.diagnosis %}
+      <div class="stage-title">{{ P.cause_label(row.diagnosis.cause) }}</div>
+      <div class="small muted">confidence {{ '%.0f'|format(100 * row.diagnosis.confidence) }}% · proposed playbook <code>{{ row.diagnosis.proposed_playbook }}</code></div>
+      {% if row.diagnosis.llm_json and row.diagnosis.llm_json.get('rationale') %}
+      <p class="rationale small" style="margin:8px 0 0">{{ row.diagnosis.llm_json['rationale'] }}</p>
+      {% endif %}
+      {% else %}<span class="dim">—</span>{% endif %}
+    </div>
+    <div class="pendcol">
+      <h3 class="section-label" style="margin-top:14px">Requested action</h3>
+      <div class="stage-title">{{ action_label(i.action) }} <span class="chip path">{{ i.playbook }}</span></div>
+      <ul class="ruledots" style="margin:10px 0 0; padding-left:18px">
+        {% for r in row.reason_hits %}
+        <li><code>{{ r.code }}</code> <span class="muted small">{{ r.message }}</span></li>
+        {% endfor %}
+        {% if not row.reason_hits %}
+        <li><code>SUPERVISED_MODE</code> <span class="muted small">agent runs supervised — every action needs a human decision</span></li>
+        {% endif %}
+      </ul>
+    </div>
+  </div>
+
+  <details class="evdetails" style="margin-top:12px"><summary>parameters</summary><pre class="tiny">{{ pp_json(i.params) }}</pre></details>
+
+  <form method="post" action="/approvals/{{ i.id }}/decide" class="inlineform">
+    {% if decline_error and decline_error.intervention_id == i.id %}
+    <p class="form-err">{{ decline_error.message }}</p>
+    {% endif %}
+    <input type="hidden" name="next" value="/approvals">
+    <label>Reviewer
+      <input type="text" name="actor" value="finance-lead@receivablesai.demo" class="txt">
+    </label>
+    <label>Reason
+      <input type="text" name="reason" value="" placeholder="optional note recorded in the audit trail" class="txt wide">
+    </label>      <button type="submit" name="decision" value="APPROVED" class="btn ok" data-confirm-approve="Approve {{ i.action }} for {{ case.entity_id }}? It executes exactly once through the bounded executor.">Approve</button>
+      <button type="submit" name="decision" value="DECLINED" class="btn bad" data-confirm-decline="Decline {{ i.action }}? The case closes as CLOSED_NOOP (audited).">Decline</button>
+  </form>
+</section>
+{% endfor %}
+{% else %}
+<section class="card">
+  <p class="empty">No interventions are waiting for approval.
+    {% if demo_active() %}Reset the demo data and the seeded supervised case (DEMO-INV-009) will appear here parked and ready for a live Approve/Decline walkthrough.{% endif %}
+  </p>
+</section>
+{% endif %}
+
+{% if recent_rows %}
+<section class="card">
+  <div class="card-hd">
+    <h2>Recent decisions</h2>
+    <span class="muted small">each decision is an audited <code>human_decision</code> event</span>
+  </div>
+  <table class="grid">
+    <thead><tr><th>When</th><th>Case</th><th>Action</th><th>Decision</th><th>Reviewer</th><th>Intervention status</th></tr></thead>
+    <tbody>
+      {% for r in recent_rows %}
+      <tr>
+        <td class="muted">{{ P.fmt_dt(r.approval.decided_at) }}</td>
+        <td>{% if r.case_id %}<a href="/cases/{{ r.case_id }}">{{ r.entity }}</a>{% else %}{{ r.entity }}{% endif %}</td>
+        <td><code>{{ r.intervention.action if r.intervention else '—' }}</code></td>
+        <td><span class="chip {{ 'ok' if r.approval.decision == 'APPROVED' else 'bad' }}">{{ r.approval.decision }}</span></td>
+        <td><code>{{ r.approval.decided_by }}</code></td>
+        <td>{{ r.intervention.status if r.intervention else '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No human decisions recorded yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

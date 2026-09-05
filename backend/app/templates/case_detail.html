@@ -1,0 +1,527 @@
+{% extends "base.html" %}
+{% from "_macros.html" import state_chip, verdict_chip, path_chip, demo_mark, money %}
+{% block title %}{{ case.entity_id }} · ReceivablesAI{% endblock %}
+
+{% block content %}
+{% set p = proposal %}
+{% set cause_phrases = {
+  'documentation_issue': 'was waiting on a corrected invoice before its finance team could release payment.',
+  'awaiting_ap_approval': 'is with the customer\u2019s AP team and awaiting release.',
+  'ptp_offered': 'has an explicit promise-to-pay on file.',
+  'invoice_dispute': 'is disputed by the customer.',
+  'fraud_suspected': 'tripped a deterministic fraud signal.',
+  'overdue': 'is past due without a payer response.',
+  'insufficient_context': 'needs an interpretation the deterministic rules cannot provide.',
+} %}
+
+{% if not chain.valid and chain.broken_on_case %}
+<div class="banner bad">
+  <strong>Audit chain integrity failure on this case.</strong>
+  Global hash-chain verification is INVALID — event #{{ chain.broken_event_id }} ({{ chain.broken_action }}) no longer matches its recorded hash. See <a href="/audit">Audit</a>.
+</div>
+{% elif not chain.valid %}
+<div class="banner warn">
+  <strong>Audit chain is globally INVALID</strong> ({{ chain.message }}) — tampered demo event is on another case. <a href="/audit">Open Audit</a>.
+</div>
+{% endif %}
+
+{# --------------------------------------------------------------- headline #}
+<a class="backlink" href="/cases">← Back to recovery queue</a>
+
+<section class="case-head">
+  <div>
+    <div class="case-kicker">
+      <span>{{ case.entity_id }}</span>
+      <span class="dim">·</span>
+      <span>{{ invoice.rzr_invoice_id if invoice else '—' }}</span>
+      <span class="dim">·</span>
+      <span>{{ customer.org_name if customer else 'unknown customer' }}</span>
+      {{ demo_mark(demo, simulated) }}
+    </div>
+    {% if case.state == 'RECOVERED' %}
+    <h1 class="case-amount rec">{{ money(case.recovered_amount_minor) }}</h1>
+    <p class="case-context"><strong>Recovered.</strong> {{ case.entity_id }} {{ cause_phrases.get(p.cause if p else '', 'was flagged for review.') }}</p>
+    {% else %}
+    <h1 class="case-amount">{{ money(case.amount_at_risk_minor) }}</h1>
+    <p class="case-context">{{ case.entity_id }} {{ cause_phrases.get(p.cause if p else '', 'was flagged for review.') }}</p>
+    {% endif %}
+  </div>
+  <div class="case-meta">
+    <dl>
+      <dt>Current outcome</dt><dd>{{ state_chip(case.state) }} {{ verdict_chip(verdict) }}</dd>
+      <dt>Overdue age</dt><dd><span class="bigstat">{{ case.days_overdue }}d</span> <span class="muted small">past due date</span></dd>
+      <dt>Risk score</dt><dd><span class="bigstat">{{ '%.2f'|format(case.risk_score) }}</span></dd>
+      <dt>At risk</dt><dd class="money">{{ money(case.amount_at_risk_minor) }}</dd>
+      <dt>Due date</dt><dd>{{ P.fmt_dt(invoice.due_date if invoice else None) }}</dd>
+      <dt>Case #</dt><dd>{{ case.id }}</dd>
+    </dl>
+  </div>
+</section>
+
+{# ======================================================== AI interpretation #}
+{% if p %}
+<section class="ai-panel anim-in d1">
+  <div class="ai-label">AI interpretation <span class="chip path">{{ p.path }}</span>{% if p.flagged %}<span class="chip warn">flagged low-confidence</span>{% endif %}</div>
+  <div class="ai-cause">{{ p.cause_label }}</div>
+  <div class="ai-conf">confidence {{ '%.0f'|format(100 * p.confidence) }}% · proposed playbook <code>{{ p.proposed_playbook_label or '—' }}</code>{% if p.promised_date_iso %} · promised <code>{{ p.promised_date_iso }}</code>{% endif %}</div>
+  {% if p.rationale %}<p class="ai-rationale">{{ p.rationale }}</p>{% endif %}
+  {% if p.evidence_llm %}
+  <ul class="quotes">
+    {% for q in p.evidence_llm %}<li>{{ q }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% if (p.rule_json or {}).get('cause') == 'insufficient_context' %}
+  <p class="note" style="color: rgba(93,42,26,.72)">The deterministic rules classifier abstained on this case — it cannot read free text. This reading comes from the language model, then passes through the policy engine below.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{# ================================================= decision chain ========= #}
+{% set reasons = (decision_payload.get('reasons') or []) %}
+{% set all_codes = reasons | map(attribute='code') | list %}
+{% set esc = decision_payload.get('escalate_code') or '' %}
+{% set ns = namespace(compliance_hit = esc.startswith('COMPLIANCE_'), fraud_hit = esc.startswith('FRAUD_'), dnc_hit = esc == 'COMPLIANCE_DNC') %}
+{% for c in all_codes %}
+{% if c.startswith('COMPLIANCE_') %}{% set ns.compliance_hit = true %}{% endif %}
+{% if c.startswith('FRAUD_') %}{% set ns.fraud_hit = true %}{% endif %}
+{% if c == 'COMPLIANCE_DNC' %}{% set ns.dnc_hit = true %}{% endif %}
+{% endfor %}
+{% set compliance_hit = ns.compliance_hit %}
+{% set fraud_hit = ns.fraud_hit %}
+{% set dnc_hit = ns.dnc_hit %}
+{% set block_hit = verdict == 'BLOCKED' %}
+
+<section class="card anim-in d2" style="margin-top:20px">
+  <div class="card-hd">
+    <h2>Decision record</h2>
+    <span class="section-label" style="margin:0"><span class="mark">AI proposes</span> · <span class="mark">policy decides</span> · executor acts</span>
+  </div>
+  <div class="chain-vert">
+
+    {# ---------------- stage 1: AI proposed ---------------- #}
+    <div class="chain-stage ai">
+      <div class="stage-tag"><span class="stage-num">01</span>AI proposed</div>
+      <div class="stage-body">
+        <div class="stage-title">{{ p.proposed_playbook_label if p else '—' }}</div>
+        <div class="stage-sub">
+          {% if p %}<code>{{ p.cause }}</code> → proposed action <code>{{ decision_payload.get('action') or p.proposed_playbook }}</code>
+          · confidence {{ '%.0f'|format(100 * p.confidence) }}%
+          {% if p.promised_date_iso %}· promised date <code>{{ p.promised_date_iso }}</code>{% endif %}
+          {% else %}no diagnosis row{% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="chain-link"></div>
+
+    {# ---------------- stage 2: policy decides ---------------- #}
+    <div class="chain-stage policy">
+      <div class="stage-tag"><span class="stage-num">02</span>Policy decides</div>
+      <div class="stage-body">
+        <div class="gate-verdict">
+          {% if verdict == 'APPROVED' %}
+          <span class="big-verdict approved">✓ Action authorized</span>
+          {% elif verdict == 'BLOCKED' %}
+          <span class="big-verdict blocked">✕ Recovery blocked</span>
+          {% elif verdict == 'REQUIRES_APPROVAL' %}
+          <span class="big-verdict approval">◷ Requires human approval</span>
+          {% elif verdict == 'ESCALATE' %}
+          <span class="big-verdict escalate">→ Escalated to human</span>
+          {% else %}
+          <span class="big-verdict">{{ verdict or '—' }}</span>
+          {% endif %}
+          {{ verdict_chip(verdict) }}
+        </div>
+
+        {% if block_hit %}
+        <div class="stop-hero">
+          <div>
+            <div class="stop-code">{{ esc or (reasons[0].code if reasons else 'POLICY_BLOCK') }}</div>
+            <div class="stop-reason">
+              {% for r in reasons %}{{ r.message }} {% endfor %}
+              {% if not reasons %}{{ chain.message }}{% endif %}
+            </div>
+          </div>
+          <div class="stop-callout">
+            {% if esc.startswith('COMPLIANCE_AGE') %}
+            <b>{{ case.days_overdue }} days overdue</b> — beyond the 120-day compliance boundary.
+            {% elif fraud_hit %}
+            <b>Deterministic fraud rules</b> hard-stop execution — the LLM cannot override them.
+            {% elif dnc_hit %}
+            <b>Do-not-contact</b> on file — outreach is refused.
+            {% else %}
+            <b>Deterministic rule</b> — the AI proposal is ignored when a hard rule fires.
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+
+        <div class="checks">
+          <div class="check {{ 'pass' if not compliance_hit and not dnc_hit else 'fail' }}">
+            <span class="c-mark">{{ '✓' if not compliance_hit and not dnc_hit else '✕' }}</span> Compliance
+          </div>
+          <div class="check {{ 'pass' if not fraud_hit else 'fail' }}">
+            <span class="c-mark">{{ '✓' if not fraud_hit else '✕' }}</span> Fraud
+          </div>
+          {% if verdict == 'APPROVED' %}
+          <div class="check pass"><span class="c-mark">✓</span> Playbook</div>
+          {% elif verdict == 'REQUIRES_APPROVAL' %}
+          <div class="check hold"><span class="c-mark">◷</span> Playbook — human</div>
+          {% elif verdict == 'ESCALATE' %}
+          <div class="check hold"><span class="c-mark">→</span> Playbook — escalated</div>
+          {% else %}
+          <div class="check block"><span class="c-mark">✕</span> Playbook</div>
+          {% endif %}
+          <div class="check {{ 'pass' if not dnc_hit else 'fail' }}">
+            <span class="c-mark">{{ '✓' if not dnc_hit else '✕' }}</span> Contact
+          </div>
+        </div>
+
+        {% if reasons %}
+        <ul class="ruledots" style="margin:10px 0 0; padding-left:18px">
+          {% for r in reasons %}
+          <li><code>{{ r.get('code','') }}</code> <span class="muted small">{{ r.get('message','') }}</span>{% if r.get('hard') %} <span class="chip bad">hard</span>{% endif %}</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+        <div class="note tiny" style="margin-top:8px">Deterministic rules in <code>app/policy/rules.py</code> run before any plan; hard hits always block. Verdict: <code>{{ verdict }}</code>{% if decision_payload.get('policy_override') %} · override={{ decision_payload.policy_override }}{% endif %}.</div>
+      </div>
+    </div>
+    <div class="chain-link"></div>
+
+    {# ---------------- stage 3: executor acts ---------------- #}
+    <div class="chain-stage exec">
+      <div class="stage-tag"><span class="stage-num">03</span>Executor acts</div>
+      <div class="stage-body">
+        {% set iv = latest_intervention %}
+        {% if iv %}
+        <div class="stage-title">{{ action_label(iv.action) }}</div>
+        <div class="stage-sub">
+          <span class="chip {{ 'ok' if iv.status in ('SUCCEEDED','APPROVED') else ('bad' if iv.status in ('FAILED','DECLINED','CANCELLED') else ('info' if iv.status == 'PENDING_APPROVAL' else 'muted')) }}">{{ iv.status }}</span>
+          <code>{{ iv.action }}</code> · playbook <code>{{ playbook_label(iv.playbook) }}</code> · mode {{ iv.mode }}
+          {% if (iv.outcome or {}).get('provider_ref', '').startswith('sim_') %}<span class="chip sim">sandbox — simulated</span>{% endif %}
+        </div>
+        {% if iv.status == 'PENDING_APPROVAL' %}
+        <p class="note">Action parked for a human. Approve or decline below — the decision goes through <code>decide_approval()</code> and is audited.</p>
+        {% endif %}
+        {% elif block_hit %}
+        <div class="stage-title">Not attempted</div>
+        <div class="stage-sub">Execution never dispatched — the deterministic policy engine blocked this plan before any action.</div>
+        {% elif verdict == 'ESCALATE' %}
+        <div class="stage-title">No execution</div>
+        <div class="stage-sub">The case was escalated to a human with full context; no automatic action was performed.</div>
+        {% else %}
+        <div class="stage-title">No action</div>
+        <div class="stage-sub">Policy chose none / wait.</div>
+        {% endif %}
+      </div>
+    </div>
+    <div class="chain-link"></div>
+
+    {# ---------------- stage 4: outcome ---------------- #}
+    <div class="chain-stage exec">
+      <div class="stage-tag"><span class="stage-num">04</span>Outcome</div>
+      <div class="stage-body">
+        {% if case.state == 'RECOVERED' %}
+        <div class="stage-title" style="color: var(--ok)">{{ money(case.recovered_amount_minor) }} recovered</div>
+        <div class="stage-sub">Payment credited to the invoice via the deterministic sandbox. {% if demo %}<span class="chip sim">simulated</span>{% endif %}</div>
+        {% elif block_hit %}
+        <div class="stage-title">Protected</div>
+        <div class="stage-sub">Amount remains at risk but the account is shielded by deterministic rules until a human reviews.</div>
+        {% elif verdict == 'ESCALATE' %}
+        <div class="stage-title">Escalated</div>
+        <div class="stage-sub">Awaiting human review with the diagnosis, evidence and proposal attached.</div>
+        {% elif case.state == 'PENDING_APPROVAL' %}
+        <div class="stage-title">Waiting on human</div>
+        <div class="stage-sub">No money moves until an approver decides.</div>
+        {% else %}
+        <div class="stage-title">{{ case.state }}</div>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+</section>
+
+{# ----------------------------------------------------- communication ----- #}
+<div class="twocol detailtop">
+  <section class="card anim-in d2">
+    <div class="card-hd">
+      <h2>Customer communication</h2>
+      <span class="muted small">unstructured context — the part rules cannot read</span>
+    </div>
+    {% if messages %}
+    <div class="thread">
+      {% for m in messages %}
+      <div class="msg {{ m.direction }}">
+        <div class="msgmeta">
+          <span class="chip path">{{ m.channel }} · {{ m.direction }}</span>
+          <span class="muted small">{{ P.fmt_dt(m.received_at) }}</span>
+        </div>
+        <blockquote>{{ m.content }}</blockquote>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty">No inbound/outbound messages on this invoice — diagnosis came from structured signals (payment errors, invoice state).</p>
+    {% endif %}
+  </section>
+
+  <section class="card anim-in d3">
+    <div class="card-hd">
+      <h2>Invoice &amp; customer</h2>
+    </div>
+    <dl class="kv">
+      <dt>Organization</dt><dd>{{ customer.org_name if customer else '—' }}</dd>
+      <dt>Contact</dt><dd>{{ customer.contact_name if customer else '—' }}{% if customer and customer.email %} · {{ customer.email }}{% endif %}</dd>
+      <dt>Behavior profile</dt><dd><code>{{ customer.behavior_profile if customer else '—' }}</code> <span class="muted small">(deterministic sandbox seed)</span></dd>
+      <dt>Compliance flags</dt>
+      <dd>
+        {% if flags %}{% for f in flags %}<span class="chip bad">{{ P.FLAG_LABELS.get(f.flag_type, f.flag_type) }}</span>{% endfor %}
+        {% else %}<span class="dim">none</span>{% endif %}
+      </dd>
+      <dt>Invoice</dt><dd><code>{{ invoice.rzr_invoice_id if invoice else case.entity_id }}</code></dd>
+      <dt>Amount</dt><dd>{{ money(invoice.amount_minor if invoice else case.amount_at_risk_minor) }}</dd>
+      <dt>Paid / outstanding</dt><dd>{{ money(invoice.paid_amount_minor if invoice else 0) }} / {{ money(invoice.outstanding_minor if invoice else case.amount_at_risk_minor) }}</dd>
+      <dt>At-risk amount</dt><dd>{{ money(case.amount_at_risk_minor) }}</dd>
+    </dl>
+    {% if payments %}
+    <h3 class="section-label" style="margin-top:18px">Payment attempts</h3>
+    <table class="grid">
+      <thead><tr><th>Payment</th><th class="num">Amount</th><th>Status</th><th>Error</th><th>When</th></tr></thead>
+      <tbody>
+        {% for pay in payments %}
+        <tr>
+          <td><code>{{ pay.rzr_payment_id }}</code></td>
+          <td class="num">{{ money(pay.amount_minor) }}</td>
+          <td>{{ pay.status }}</td>
+          <td class="small"><code>{{ pay.error_code or '—' }}</code><span class="muted tiny">{{ pay.error_description or '' }}</span></td>
+          <td class="muted">{{ P.fmt_dt(pay.attempted_at) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No payment attempts recorded.</p>
+    {% endif %}
+  </section>
+</div>
+
+{# --------------------------------------------------------- diagnosis ----- #}
+{% if diagnoses %}
+<section class="card anim-in d3">
+  <div class="card-hd">
+    <h2>Diagnosis history</h2>
+    <span class="muted small">{{ diagnoses|length }} row{{ 's' if diagnoses|length != 1 }}</span>
+  </div>
+  {% for d in diagnoses %}
+  <div class="diagrow {{ 'latest' if loop.last }}">
+    <div class="diaghead">
+      <span class="chip path">{{ P.PATH_LABELS.get(d.path, d.path) }}</span>
+      <strong>{{ P.cause_label(d.cause) }}</strong> <code class="small">{{ d.cause }}</code>
+      <span class="muted small">confidence {{ '%.0f'|format(100 * d.confidence) }}%</span>
+      {% if d.flagged %}<span class="chip warn">flagged</span>{% endif %}
+      {% if not d.llm_ok and d.path == 'rules' %}<span class="chip info">rules-only</span>{% endif %}
+      {% if d.proposed_playbook %}<span class="muted small">proposed playbook: {{ playbook_label(d.proposed_playbook) }}</span>{% endif %}
+    </div>
+    {% if d.rule_json %}
+    <details class="evdetails"><summary>Rules evidence</summary><pre>{{ pp_json(d.rule_json) }}</pre></details>
+    {% endif %}
+    {% if d.llm_json %}
+    <details class="evdetails" open>
+      <summary>Reading of the unstructured context{{ ' — rules abstained' if (d.rule_json or {}).get('cause') == 'insufficient_context' }}</summary>
+      {% if d.llm_json.get('rationale') %}<p class="rationale">{{ d.llm_json['rationale'] }}</p>{% endif %}
+      {% if d.llm_json.get('evidence') %}
+      <ul class="quotes">
+        {% for q in d.llm_json['evidence'] %}<li>“{{ q }}”</li>{% endfor %}
+      </ul>
+      {% endif %}
+      {% if d.llm_json.get('promised_date_iso') %}<p class="small">promised date: <code>{{ d.llm_json['promised_date_iso'] }}</code></p>{% endif %}
+      <pre class="tiny">{{ pp_json(d.llm_json) }}</pre>
+    </details>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{# ------------------------------------------------------- interventions --- #}
+<section class="card anim-in d3">
+  <div class="card-hd">
+    <h2>Interventions</h2>
+    <span class="muted small">whitelisted actions only — exactly-once idempotent</span>
+  </div>
+  {% if interventions %}
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>#</th><th>Action</th><th>Playbook</th><th>Status</th><th>Verdict</th>
+        <th>Policy reasons</th><th>Outcome</th><th>When</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for iv in interventions %}
+      <tr>
+        <td>{{ iv.id }}</td>
+        <td><strong>{{ action_label(iv.action) }}</strong><code class="small">{{ iv.action }}</code></td>
+        <td class="small">{{ playbook_label(iv.playbook) }}</td>
+        <td><span class="chip {{ 'ok' if iv.status in ('SUCCEEDED','APPROVED') else ('bad' if iv.status in ('FAILED','DECLINED','CANCELLED') else ('info' if iv.status == 'PENDING_APPROVAL' else 'muted')) }}">{{ iv.status }}</span></td>
+        <td>{{ verdict_chip(iv.verdict) }}</td>
+        <td class="small">
+          {% for r in iv.policy_reasons or [] %}
+          <div><code>{{ r.get('code', '') }}</code> <span class="muted tiny">{{ r.get('message', '') }}</span></div>
+          {% endfor %}
+        </td>
+        <td class="small">
+          {% set oc = iv.outcome or {} %}
+          {% if oc.get('ok') is not none %}<div>ok: {{ oc.get('ok') }}{% if oc.get('failure_code') %} · <code>{{ oc['failure_code'] }}</code>{% endif %}</div>{% endif %}
+          {% if oc.get('pending_payment') %}<div class="muted">payment pending → {{ P.fmt_dt(oc['pending_payment'].get('pending_at')) }}</div>{% endif %}
+          {% if iv.error %}<div class="bad-text">error: {{ iv.error }}</div>{% endif %}
+          <details class="evdetails"><summary>outcome</summary><pre class="tiny">{{ pp_json(iv.outcome or {}) }}</pre></details>
+        </td>
+        <td class="muted">{{ P.fmt_dt(iv.executed_at or iv.created_at) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No intervention was executed — the policy engine chose block / escalate / wait.</p>
+  {% endif %}
+
+  {% if case.state == 'PENDING_APPROVAL' %}
+  {% set pending_iv = latest_intervention %}
+  {% if pending_iv and pending_iv.status == 'PENDING_APPROVAL' %}
+  <div class="approvebox">
+    <h3>Supervised action awaiting your decision</h3>
+    <p class="small">
+      {{ action_label(pending_iv.action) }} · {{ playbook_label(pending_iv.playbook) }} —
+      parked by the policy engine; your decision goes through the real approval path (<code>decide_approval()</code>) and is audited.
+    </p>
+    <form method="post" action="/approvals/{{ pending_iv.id }}/decide" class="inlineform">
+      <input type="hidden" name="next" value="/cases/{{ case.id }}">
+      <label>Reviewer
+        <input type="text" name="actor" value="finance-lead@receivablesai.demo" class="txt">
+      </label>
+      <label>Reason
+        <input type="text" name="reason" value="" placeholder="optional note for the audit trail" class="txt wide">
+      </label>
+      <button type="submit" name="decision" value="APPROVED" class="btn ok" data-confirm-approve="Approve this action? It will execute exactly once through the bounded executor.">Approve</button>
+      <button type="submit" name="decision" value="DECLINED" class="btn bad" data-confirm-decline="Decline this action? The case closes as CLOSED_NOOP.">Decline</button>
+    </form>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  {% if approvals %}
+  <h3 class="section-label" style="margin-top:18px">Human decisions</h3>
+  <ul class="stoplist">
+    {% for a in approvals.values() %}
+    <li>
+      <span class="chip {{ 'ok' if a.decision == 'APPROVED' else 'bad' }}">{{ a.decision }}</span>
+      <span class="small">by <code>{{ a.decided_by }}</code> at {{ P.fmt_dt(a.decided_at) }}</span>
+      {% if a.reason %}<span class="muted small">— {{ a.reason }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+{# --------------------------------------------------------- escalations --- #}
+{% if escalations %}
+<section class="card anim-in d3">
+  <div class="card-hd"><h2>Escalations</h2></div>
+  <ul class="stoplist">
+    {% for e in escalations %}
+    <li>
+      <span class="chip accent">{{ e.reason_code }}</span>
+      <span class="small">{{ P.esc_label(e.reason_code) }}</span>
+      <span class="muted small">status {{ e.status }} · {{ P.fmt_dt(e.created_at) }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{# ----------------------------------------------------------- promises ---- #}
+{% if promises %}
+<section class="card anim-in d3">
+  <div class="card-hd"><h2>Promise-to-pay</h2></div>
+  <table class="grid">
+    <thead><tr><th>Promised date</th><th class="num">Amount</th><th>Status</th><th>Created</th></tr></thead>
+    <tbody>
+      {% for pr in promises %}
+      <tr>
+        <td>{{ P.fmt_dt(pr.promised_date) }}</td>
+        <td class="num">{{ money(pr.amount_minor) }}</td>
+        <td>{{ pr.status }}</td>
+        <td class="muted">{{ P.fmt_dt(pr.created_at) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{# ------------------------------------------------------------ timeline --- #}
+<section class="card anim-in d4">
+  <div class="card-hd">
+    <h2>Event timeline</h2>
+    <span class="muted small">hash-chained audit — {{ chain.message }}</span>
+  </div>
+  {% if events %}
+  {% set stage_map = {
+    'case_opened': ('signal', 'Signal detected'),
+    'event_unresolved_invoice': ('signal', 'Signal detected'),
+    'below_action_threshold_no_action': ('signal', 'Assessed — below threshold'),
+    'event_duplicate_ignored': ('signal', 'Duplicate ignored'),
+    'diagnosis_fused': ('diagnosis', 'AI diagnosis'),
+    'llm_diagnosis': ('diagnosis', 'AI diagnosis'),
+    'llm_unavailable_rules_fallback': ('diagnosis', 'Rules fallback'),
+    'policy_decision': ('policy', 'Policy decision'),
+    'human_decision': ('policy', 'Human decision'),
+    'action_dispatched': ('execute', 'Action dispatched'),
+    'action_result': ('execute', 'Action result'),
+    'action_blocked_not_whitelisted': ('execute', 'Blocked — not whitelisted'),
+    'approval_requested': ('execute', 'Approval requested'),
+    'approval_granted_executing': ('execute', 'Approval granted — executing'),
+    'approval_timeout_auto_declined': ('execute', 'Approval timeout'),
+    'deferred_for_promise': ('execute', 'Deferred for promise'),
+    'action_deferred': ('execute', 'Deferred'),
+    'retry_scheduled_after_failure': ('execute', 'Retry scheduled'),
+    'next_ladder_step_scheduled': ('execute', 'Next ladder step'),
+    'payment_credited': ('outcome', 'Payment credited'),
+    'state_changed': ('outcome', 'State changed'),
+    'escalated': ('outcome', 'Escalated'),
+  } %}
+  {% set stage_classes = {'signal': 'muted', 'diagnosis': 'path', 'policy': 'info', 'execute': 'warn', 'outcome': 'ok'} %}
+  <div class="auditlist">
+    {% for e in events %}
+    {% set stage = stage_map.get(e.action, ('signal', e.action)) %}
+    <div class="auditrow {{ 'broken' if e.id == chain.broken_event_id }}">
+      <div class="auditseq">#{{ e.seq }}</div>
+      <div class="auditmain">
+        <div class="audithdr">
+          <span class="chip {{ stage_classes.get(stage[0], 'muted') }}">{{ stage[1] }}</span>
+          <strong>{{ P.event_action_label(e.action) }}</strong>
+          <code class="small">{{ e.action }}</code>
+          <span class="chip muted">actor: {{ e.actor }}</span>
+          {% if e.id == chain.broken_event_id %}<span class="chip bad">tamper point</span>{% endif %}
+          <span class="muted small">{{ P.fmt_dt(e.created_at) }}</span>
+        </div>
+        {% if e.payload %}
+        <details class="evdetails"><summary>payload</summary><pre class="tiny">{{ pp_json(e.payload) }}</pre></details>
+        {% endif %}
+        <div class="hashline">
+          <code class="tiny muted">prev {{ e.prev_hash[:12] or 'genesis' }}…</code>
+          <code class="tiny">→ sha256 {{ e.hash[:16] }}…</code>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No audit events on this case.</p>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block bodyclass %}casedetail{% endblock %}

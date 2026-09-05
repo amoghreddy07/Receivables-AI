@@ -1,0 +1,25 @@
+{# Shared chips — display-only, backed by app.presentation maps #}
+{% macro state_chip(state) -%}
+<span class="chip {{ P.STATE_CLASS.get(state, 'muted') }}">{{ P.STATE_LABELS.get(state, state) }}</span>
+{%- endmacro %}
+
+{% macro verdict_chip(verdict) -%}
+{% if verdict -%}
+<span class="chip {{ P.VERDICT_CLASS.get(verdict, 'muted') }}">{{ P.VERDICT_LABELS.get(verdict, verdict) }}</span>
+{%- else -%}
+<span class="dim">—</span>
+{%- endif %}
+{%- endmacro %}
+
+{% macro path_chip(path) -%}
+{% if path %}<span class="chip path">{{ path }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro demo_mark(demo, simulated) -%}
+{% if demo %}<span class="chip demo" title="Seeded demo case (scripts/seed_demo.py)">demo</span>{% endif %}
+{%- if simulated %}<span class="chip sim" title="Outcome produced by the deterministic sandbox — simulated money">simulated</span>{% endif %}
+{%- endmacro %}
+
+{% macro money(minor, cls="") -%}
+<span class="money {{ cls }}">{{ P.inr_major(minor) }}</span>
+{%- endmacro %}

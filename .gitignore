@@ -1,0 +1,53 @@
+# ---- Python -------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# ---- Tooling caches ------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- Virtual environments ------------------------------------------------
+.venv/
+venv/
+env/
+
+# ---- Secrets / local config ---------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---- Logs ----------------------------------------------------------------
+*.log
+
+# ---- Local databases (generated runtime artifacts — never source) -------
+# Every .db under data/ is a regenerated runtime artifact, never source:
+#   * eval_runs.db  — evaluation report DB, rebuilt row-by-row by
+#                     `python -m scripts.run_eval` (rows are replaced per
+#                     run_id, so runs are deterministic and re-runnable).
+#   * receivables.db — default local dev DB (config.Settings.db_url).
+#   * demo.db        — demo-seed DB created by `scripts/seed_demo.py`.
+# The evaluation corpus itself lives in CODE (app/eval/corpus.py) and the
+# demo cases in CODE (scripts/seed_demo.py), so no committed state is lost
+# when these files are ignored or deleted.
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
+
+# ---- Local-only helper scripts (debug scratch) --------------------------
+backend/scripts/dbg_*.py
+
+# ---- Editors / OS --------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- Tool-local state ----------------------------------------------------
+.freebuff/

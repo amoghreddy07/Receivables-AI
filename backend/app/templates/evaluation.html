@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}Evaluation · ReceivablesAI{% endblock %}
+
+{% block content %}
+<section class="pagehead eval-hero">
+  <div>
+    <div class="section-label"><span class="mark">Evaluation</span> — 63-case benchmark</div>
+    <h1>Agent evaluation</h1>
+    <p class="sub">
+      Metrics are read from persisted <code>EvalRun</code>/<code>EvalCase</code> rows in <code>{{ db_file }}</code> —
+      never hardcoded. The AI-enabled run is fully reproducible offline: <code>llm_mode=auto</code> without an API key
+      routes to the deterministic NLU diagnoser (<code>app/diagnosis/offline.py</code>), so no network or credentials are ever required.
+    </p>
+  </div>
+  <div class="ai-mode-chip">
+    <div class="m">AI mode</div>
+    <div class="v">Offline NLU</div>
+    <div class="muted tiny" style="margin-top:2px">deterministic · no API key · reproducible</div>
+  </div>
+</section>
+
+<section class="card anim-in">
+  <div class="card-hd">
+    <h2>Three-way comparison <span class="muted small">(latest run per agent)</span></h2>
+    {% include "_eval_status.html" %}
+  </div>
+  {% if comparison %}
+  {% set ai = comparison[0] if comparison and comparison[0].llm_mode == 'auto' else None %}
+  {% set rules = comparison | selectattr('llm_mode', 'equalto', 'rules') | selectattr('agent', 'equalto', 'receivablesai') | list %}
+  {% set naive = comparison | selectattr('agent', 'equalto', 'naive_retry') | list %}
+  {% set rules_m = (rules[0].metrics if rules else {}) %}
+  {% set naive_m = (naive[0].metrics if naive else {}) %}
+  {% set ai_m = ai.metrics if ai else {} %}
+  {% if ai and rules %}
+  <div class="uplift">
+    <div class="uplift-cell gain">
+      <div class="u-label">Recovery-rate uplift vs rules-only</div>
+      <div class="u-value">{{ '+' ~ (100 * ((ai_m.get('recovery_rate') or 0) - (rules_m.get('recovery_rate') or 0))) | round(1) ~ 'pp' }}</div>
+    </div>
+    <div class="uplift-cell gain">
+      <div class="u-label">Violations avoided vs naive</div>
+      <div class="u-value">{{ (naive_m.get('hard_violations') or 0) - (ai_m.get('hard_violations') or 0) }}</div>
+    </div>
+    <div class="uplift-cell risk">
+      <div class="u-label">False-action rate, AI-enabled</div>
+      <div class="u-value">{{ P.pct(ai_m.get('false_action_rate')) }}</div>
+    </div>
+  </div>
+  {% endif %}
+
+  <table class="grid eval">
+    <thead>
+      <tr>
+        <th>Agent</th>
+        <th class="num">Recovery rate</th>
+        <th class="num">Recovered / expected</th>
+        <th class="num">Action precision</th>
+        <th class="num">False-action rate</th>
+        <th class="num">Hard violations</th>
+        <th class="num">Escalation prec / rec</th>
+        <th>Run</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in comparison %}
+      {% set m = run.metrics %}
+      <tr class="{{ 'airow' if run.llm_mode == 'auto' }}">
+        <td>
+          <strong>{{ run.label }}</strong>
+          <span class="tiny muted">{{ run.agent }} · {{ run.llm_mode }} · {{ P.fmt_dt(run.started_at) }}</span>
+        </td>
+        <td class="num strong">{{ P.pct(m.get('recovery_rate')) }}</td>
+        <td class="num">{{ P.inr_major(m.get('money_recovered_minor')) }} <span class="muted tiny">of {{ P.inr_major(m.get('expected_minor')) }} ({{ P.pct((m.get('pct_of_expected') or 0) / 100) }})</span></td>
+        <td class="num">{{ P.pct(m.get('action_precision')) }} <span class="tiny muted">({{ m.get('executed_actions', 0) }} actions)</span></td>
+        <td class="num">{{ P.pct(m.get('false_action_rate')) }}</td>
+        <td class="num {{ 'bad-text' if m.get('hard_violations') else 'ok-text' }}">{{ m.get('hard_violations', 0) }}</td>
+        <td class="num small">{{ P.pct(m.get('escalation_precision')) }} / {{ P.pct(m.get('escalation_recall')) }}</td>
+        <td><code class="tiny">{{ run.run_id }}</code></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <form method="post" action="/eval/run" class="inlineform" style="margin-top:18px">
+    <button type="submit" class="btn ink" {% if run_state.running %}disabled{% endif %}>
+      {{ 'Batch running…' if run_state.running else 'Run evaluation batch (rules + AI + naive)' }}
+    </button>
+    <span class="muted small">Re-runs the deterministic 63-case corpus through the real agent loop (offline NLU for AI mode). Takes tens of seconds — the status indicator above updates automatically.</span>
+  </form>
+  {% else %}
+  <p class="empty">No EvalRun rows yet. Start the batch below — it runs offline through the deterministic NLU path.</p>
+  <form method="post" action="/eval/run" class="inlineform">
+    <button type="submit" class="btn ink" {% if run_state.running %}disabled{% endif %}>
+      {{ 'Batch running…' if run_state.running else 'Run evaluation batch (rules + AI + naive)' }}
+    </button>
+  </form>
+  {% endif %}
+</section>
+
+{% if comparison %}
+<section class="card anim-in d2">
+  <div class="card-hd">
+    <h2>Structured vs unstructured cases</h2>
+    <span class="muted small">scenario split derived from the persisted corpus</span>
+  </div>
+  {% for run in comparison %}
+  {% set sp = splits.get(run.run_id) %}
+  {% if sp %}
+  <h3 class="section-label" style="margin:16px 0 8px">{{ run.label }} <code class="tiny">{{ run.run_id }}</code></h3>
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Subset</th>
+        <th class="num">Cases (recoverable)</th>
+        <th class="num">Recovered</th>
+        <th class="num">Recovery rate</th>
+        <th class="num">Money / expected</th>
+        <th class="num">Action precision</th>
+        <th class="num">False actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for subset in ['structured', 'unstructured'] %}
+      {% set s = sp[subset] %}
+      <tr class="{{ 'airow' if run.llm_mode == 'auto' and subset == 'unstructured' }}">
+        <td>
+          {% if subset == 'unstructured' %}
+            <strong>Unstructured context</strong>
+            <span class="chip demo" title="ground truth lives in customer emails / AP communication">NLU-needed</span>
+          {% else %}
+            <strong>Structured signals</strong>
+            <span class="chip path">rules-readable</span>
+          {% endif %}
+        </td>
+        <td class="num">{{ s.cases }} ({{ s.recoverable }})</td>
+        <td class="num">{{ s.recovered }}</td>
+        <td class="num strong">{{ P.pct(s.rate) }}</td>
+        <td class="num">{{ P.inr_major(s.money_minor) }} <span class="muted tiny">of {{ P.inr_major(s.expected_minor) }} ({{ P.pct((s.pct_of_expected or 0) / 100) }})</span></td>
+        <td class="num">{{ P.pct(s.precision) }}</td>
+        <td class="num">{{ s.false_actions }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="note tiny">
+    Rules-only cannot read unstructured threads (the classifier abstains and escalates), so the
+    AI-enabled advantage concentrates in the unstructured subset. Hard signals on structured cases
+    are still decided by the deterministic rules + policy engine.
+  </p>
+  {% endif %}
+  {% endfor %}
+</section>
+
+<section class="card anim-in d3">
+  <div class="card-hd"><h2>Run history</h2></div>
+  <table class="grid">
+    <thead>
+      <tr><th>Run</th><th>Agent</th><th>Mode</th><th>Started</th><th class="num">Rate</th><th class="num">Recovered</th><th class="num">Violations</th></tr>
+    </thead>
+    <tbody>
+      {% for r in history %}
+      <tr class="{{ '' if r.canonical else 'dimrow' }}">
+        <td><code class="small">{{ r.run_id }}</code></td>
+        <td>{{ r.agent }}</td>
+        <td>{{ r.llm_mode }} {% if not r.canonical %}<span class="chip muted" title="legacy run-id from before the three-way scheme">legacy</span>{% endif %}</td>
+        <td class="muted">{{ P.fmt_dt(r.started_at) }}</td>
+        <td class="num">{{ P.pct((r.metrics or {}).get('recovery_rate')) }}</td>
+        <td class="num">{{ P.inr_major((r.metrics or {}).get('money_recovered_minor')) }}</td>
+        <td class="num">{{ (r.metrics or {}).get('hard_violations', 0) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No runs recorded.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{# Only JS on this page: HTMX powers the /eval/status poll above. The poll is
+   self-terminating — the completed/failed fragment carries no hx-trigger, so the
+   indicator stops updating on its own; the page is never reloaded. #}
+<script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js" crossorigin="anonymous"></script>
+{% endblock %}
